@@ -56,11 +56,12 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         sec: us / 1_000_000,
         usec: us % 1_000_000,
     };
+    let len = size_of::<TimeVal>();
     copyout(
         current_user_token(),
         _ts as *const u8,
-        size_of::<TaskInfo>(),
-        ptr2bytes(&timeval as *const _ as *const u8, size_of::<TimeVal>()),
+        len,
+        ptr2bytes(&timeval as *const _ as *const u8, len),
     );
     0
 }
@@ -71,11 +72,12 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info");
     let taskinfo = get_task_info();
+    let len = size_of::<TaskInfo>();
     copyout(
         current_user_token(),
         _ti as *const u8,
-        size_of::<TaskInfo>(),
-        ptr2bytes(&taskinfo as *const _ as *const u8, size_of::<TaskInfo>()),
+        len,
+        ptr2bytes(&taskinfo as *const _ as *const u8, len),
     );
     0
 }
@@ -110,6 +112,9 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
     trace!("kernel: sys_munmap");
+    if _start % 4096 != 0 {
+        return -1;
+    }
     let start_va = VirtAddr::from(_start);
     let end_va = VirtAddr::from(VirtAddr::from(_start + _len).ceil());
     munmap(start_va, end_va)

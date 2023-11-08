@@ -1,7 +1,8 @@
 //! Implementation of [`MapArea`] and [`MemorySet`].
 
+use super::page_table::PageTableEntry;
 use super::{frame_alloc, FrameTracker};
-use super::{PTEFlags, PageTable, PageTableEntry};
+use super::{PTEFlags, PageTable};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::{
@@ -245,6 +246,18 @@ impl MemorySet {
             true
         } else {
             false
+        }
+    }
+    /// remove area
+    pub fn remove_frame_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        if let Some(area) = self.areas.iter_mut().find(|area| {
+            area.vpn_range.get_start() == start_va.floor()
+                && area.vpn_range.get_end() == end_va.floor()
+        }) {
+            area.unmap(&mut self.page_table);
+            return 0;
+        } else {
+            return -1;
         }
     }
 

@@ -16,7 +16,7 @@ mod task;
 
 use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
-use crate::mm::{MapPermission, VirtAddr};
+use crate::mm::{MapPermission, VPNRange, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::syscall::process::TaskInfo;
 use crate::timer::get_time_ms;
@@ -196,10 +196,19 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         let current_tcb = &mut inner.tasks[current];
+
+        // judge if allocated
+        for vpn in VPNRange::new(start_va.floor(), end_va.floor()) {
+            if let Some(pte) = current_tcb.memory_set.translate(vpn) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+        }
+
         current_tcb
             .memory_set
             .insert_framed_area(start_va, end_va, perm);
-        // 未作错误处理，因为map过程中发现页面已被分配则直接assert
         0
     }
 
@@ -207,11 +216,16 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         let current_tcb = &mut inner.tasks[current];
-        if current_tcb.memory_set.shrink_to(start_va, end_va) {
-            0
-        } else {
-            -1
+
+        // judge if allocated
+        for vpn in VPNRange::new(start_va.floor(), end_va.floor()) {
+            if let Some(pte) = current_tcb.memory_set.translate(vpn) {
+                if !pte.is_valid() {
+                    return -1;
+                }
+            }
         }
+        current_tcb.memory_set.remove_frame_area(start_va, end_va)
     }
 }
 
