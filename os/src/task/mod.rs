@@ -14,8 +14,12 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
+use crate::syscall::process::TaskInfo;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -153,6 +157,62 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Add the syscall count of current task by 1
+    fn record_syscall(&self, syscall_id: usize) -> () {
+        if syscall_id <= MAX_SYSCALL_NUM {
+            let mut inner = self.inner.exclusive_access();
+            let current = inner.current_task;
+            inner.tasks[current].syscall_times[syscall_id] += 1;
+        }
+    }
+
+    /// Get TaskInfo struct for current task
+    fn get_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        let TaskControlBlock {
+            task_cx: _,
+            task_status,
+            memory_set: _,
+            trap_cx_ppn: _,
+            base_size: _,
+            heap_bottom: _,
+            program_brk: _,
+            syscall_times,
+            start_time,
+        } = inner.tasks[current_id];
+
+        TaskInfo {
+            status: task_status,
+            syscall_times,
+            time: get_time_ms() - start_time,
+        }
+    }
+
+    /// mmap for current task
+
+    fn mmap(&self, start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_tcb = &mut inner.tasks[current];
+        current_tcb
+            .memory_set
+            .insert_framed_area(start_va, end_va, perm);
+        // 未作错误处理，因为map过程中发现页面已被分配则直接assert
+        0
+    }
+
+    fn munmap(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_tcb = &mut inner.tasks[current];
+        if current_tcb.memory_set.shrink_to(start_va, end_va) {
+            0
+        } else {
+            -1
+        }
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +261,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Add the syscall count of current task by 1
+pub fn record_syscall(syscall_id: usize) -> () {
+    TASK_MANAGER.record_syscall(syscall_id);
+}
+
+/// Get TaskInfo struct for current task
+pub fn get_task_info() -> TaskInfo {
+    TASK_MANAGER.get_task_info()
+}
+
+/// mmap
+pub fn mmap(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) -> isize {
+    TASK_MANAGER.mmap(start_va, end_va, perm)
+}
+
+/// munmap
+pub fn munmap(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    TASK_MANAGER.munmap(start_va, end_va)
 }
