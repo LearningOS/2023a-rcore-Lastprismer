@@ -219,6 +219,34 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .get_mut()
 }
 
+/// Copy from kernel to user.
+///
+/// Copy src vector to virtual address va in a given page table.
+pub fn copyout(token: usize, va: *const u8, len: usize, src: Vec<u8>) -> () {
+    let vecs = translated_byte_buffer(token, va, len);
+    let mut start = 0;
+    for vec in vecs {
+        let end = vec.len();
+        vec.copy_from_slice(&src[start..end]);
+        start = end + 1;
+    }
+    assert!(start == src.len() + 1);
+}
+
+/// Get byte vector from ptr and length
+pub fn ptr2bytes(ptr: *const u8, len: usize) -> Vec<u8> {
+    let mut v = Vec::new();
+    unsafe {
+        let mut p = ptr as *mut u8;
+        for _ in 0..len {
+            let val = *p;
+            v.push(val);
+            p = p.offset(1);
+        }
+    }
+    v
+}
+
 /// An abstraction over a buffer passed from user space to kernel space
 pub struct UserBuffer {
     /// A list of buffers
