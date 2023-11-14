@@ -2,12 +2,12 @@
 
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
-use super::TaskControlBlock;
 use super::{add_task, SignalFlags};
+use super::{current_task_tid, TaskControlBlock};
 use super::{pid_alloc, PidHandle};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{translated_refmut, MemorySet, KERNEL_SPACE};
-use crate::sync::{Condvar, Mutex, Semaphore, UPSafeCell};
+use crate::sync::{Condvar, Mutex, ResourceManager, Semaphore, UPSafeCell};
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -49,6 +49,8 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// deadlock detection enabled
+    pub deadlock_detection: bool,
 }
 
 impl ProcessControlBlockInner {
@@ -81,6 +83,149 @@ impl ProcessControlBlockInner {
     /// get a task with tid in this process
     pub fn get_task(&self, tid: usize) -> Arc<TaskControlBlock> {
         self.tasks[tid].as_ref().unwrap().clone()
+    }
+    pub fn detect_deadlock_mutex(&self, rid: usize) -> bool {
+        // 可利用资源向量
+        let mut available = Vec::new();
+        for i in self.mutex_list.iter() {
+            available.push(if let Some(mutex) = i {
+                mutex.available()
+            } else {
+                0
+            });
+        }
+
+        let task_cnt = self.tasks.len();
+        let res_cnt = self.mutex_list.len();
+        // 分配矩阵, 表示每类资源已分配给每个线程的资源数
+        let mut allocation = vec![vec![0usize; res_cnt]; task_cnt];
+        // 需求矩阵, 表示每个线程还需要的各类资源数量
+        let mut need = vec![vec![0usize; res_cnt]; task_cnt];
+        for (rid, m) in self.mutex_list.iter().enumerate() {
+            if let Some(mutex) = m {
+                for tid in mutex.allocation() {
+                    allocation[tid][rid] = 1;
+                }
+                for tid in mutex.need() {
+                    need[tid][rid] = 1;
+                }
+            }
+        }
+
+        // 工作向量, 表示操作系统可提供给线程继续运行所需的各类资源数目
+        let mut work = available.clone();
+        // 结束向量, 表示系统是否有足够的资源分配给线程， 使之运行完成
+        let mut finish = vec![false; task_cnt];
+
+        let tid = current_task_tid();
+        // 假设先给当前线程分配一个当前资源
+        need[tid][rid] += 1;
+
+        loop {
+            let mut executed = false;
+            for i in 0..task_cnt {
+                if !finish[i] {
+                    // 判断线程 i 是否可以被分配资源
+                    let mut can_allocate = true;
+                    for j in 0..res_cnt {
+                        if need[i][j] > work[j] {
+                            can_allocate = false;
+                            break;
+                        }
+                    }
+                    // 如果可以分配资源，就更新资源的分配情况
+                    if can_allocate {
+                        for j in 0..res_cnt {
+                            work[j] += allocation[i][j];
+                        }
+                        finish[i] = true;
+                        executed = true;
+                    }
+                }
+            }
+            if !executed {
+                // 程序停止执行，说明死锁或者执行完成
+                break;
+            }
+        }
+        for i in finish.iter() {
+            if !*i {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn detect_deadlock_semaphore(&self, rid: usize) -> bool {
+        // 可利用资源向量
+        let mut available = Vec::new();
+        for i in self.semaphore_list.iter() {
+            available.push(if let Some(sem) = i {
+                sem.available()
+            } else {
+                0
+            });
+        }
+
+        let task_cnt = self.tasks.len();
+        let res_cnt = self.semaphore_list.len();
+        // 分配矩阵, 表示每类资源已分配给每个线程的资源数
+        let mut allocation = vec![vec![0usize; res_cnt]; task_cnt];
+        // 需求矩阵, 表示每个线程还需要的各类资源数量
+        let mut need = vec![vec![0usize; res_cnt]; task_cnt];
+        for (rid, m) in self.semaphore_list.iter().enumerate() {
+            if let Some(sem) = m {
+                for tid in sem.allocation() {
+                    allocation[tid][rid] = 1;
+                }
+                for tid in sem.need() {
+                    need[tid][rid] = 1;
+                }
+            }
+        }
+
+        // 工作向量, 表示操作系统可提供给线程继续运行所需的各类资源数目
+        let mut work = available.clone();
+        // 结束向量, 表示系统是否有足够的资源分配给线程， 使之运行完成
+        let mut finish = vec![false; task_cnt];
+
+        let tid = current_task_tid();
+        // 假设先给当前线程分配一个当前资源
+        need[tid][rid] += 1;
+
+        loop {
+            let mut executed = false;
+            for i in 0..task_cnt {
+                if !finish[i] {
+                    // 判断线程 i 是否可以被分配资源
+                    let mut can_allocate = true;
+                    for j in 0..res_cnt {
+                        if need[i][j] > work[j] {
+                            can_allocate = false;
+                            break;
+                        }
+                    }
+                    // 如果可以分配资源，就更新资源的分配情况
+                    if can_allocate {
+                        for j in 0..res_cnt {
+                            work[j] += allocation[i][j];
+                        }
+                        finish[i] = true;
+                        executed = true;
+                    }
+                }
+            }
+            if !executed {
+                // 程序停止执行，说明死锁或者执行完成
+                break;
+            }
+        }
+        for i in finish.iter() {
+            if !*i {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -119,6 +264,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_detection: false,
                 })
             },
         });
@@ -245,6 +391,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_detection: parent.deadlock_detection,
                 })
             },
         });
