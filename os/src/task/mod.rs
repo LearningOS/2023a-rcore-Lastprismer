@@ -59,7 +59,8 @@ lazy_static! {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
             syscall_times: [0; MAX_SYSCALL_NUM],
-            start_time: 0
+            start_time: 0,
+            started: false,
         }; MAX_APP_NUM];
 
         for (i, task) in tasks.iter_mut().enumerate() {
@@ -87,6 +88,8 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        task0.start_time = get_time_ms();
+        task0.started = true;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -129,6 +132,10 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            if !inner.tasks[next].started {
+                inner.tasks[next].started = true;
+                inner.tasks[next].start_time = get_time_ms();
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -161,6 +168,7 @@ impl TaskManager {
             task_cx: _,
             syscall_times,
             start_time,
+            started: _,
         } = inner.tasks[current_id];
 
         TaskInfo {

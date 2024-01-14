@@ -14,6 +14,8 @@ pub struct TaskControlBlock {
     pub syscall_times: [u32; MAX_SYSCALL_NUM],
     /// Start time of the task
     pub start_time: usize,
+    ///
+    pub started: bool,
 }
 
 /// The status of a task
